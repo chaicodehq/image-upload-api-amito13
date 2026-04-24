@@ -1,9 +1,10 @@
 import sharp from 'sharp';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
+import fs from 'fs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const THUMBNAILS_DIR = path.join(__dirname, '../../uploads/thumbnails');
+const UPLOADS_DIR = path.join(__dirname, '..', '..', 'uploads');
+const THUMBNAILS_DIR = path.join(UPLOADS_DIR, 'thumbnails');
 
 /**
  * TODO: Generate thumbnail for uploaded image
@@ -36,6 +37,28 @@ const THUMBNAILS_DIR = path.join(__dirname, '../../uploads/thumbnails');
  */
 export async function generateThumbnail(filename) {
   // Your code here
+  const inputPath = path.join(UPLOADS_DIR, filename);
+  const inputBuffer = fs.readFileSync(inputPath);
+
+  const thumbnailName = 'thumb-' + filename.replace(/\.\w+$/, '.jpg');
+
+  const outputPath = path.join(THUMBNAILS_DIR, thumbnailName);
+
+  if (!fs.existsSync(THUMBNAILS_DIR)) {
+    fs.mkdirSync(THUMBNAILS_DIR, { recursive: true });
+  }
+
+  const thumbnailBuffer = await sharp(inputPath)
+    .resize({width:200,height:200,fit:'inside',withoutEnlargement:true})
+    .jpeg({quality:60, force: true})
+    .toBuffer();
+
+  if (thumbnailBuffer.length <= inputBuffer.length) {
+    fs.writeFileSync(outputPath, thumbnailBuffer);
+  } else {
+    fs.writeFileSync(outputPath, inputBuffer);
+  }
+  return thumbnailName;
 }
 
 /**
@@ -59,4 +82,7 @@ export async function generateThumbnail(filename) {
  */
 export async function getImageDimensions(filepath) {
   // Your code here
+  const metadata = await sharp(filepath).metadata();
+  return { width: metadata.width, height: metadata.height };
+  
 }

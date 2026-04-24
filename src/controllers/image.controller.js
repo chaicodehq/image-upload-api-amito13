@@ -1,10 +1,11 @@
 import fs from 'fs';
 import path from 'path';
+import mongoose from 'mongoose';
 import { fileURLToPath } from 'url';
 import { Image } from '../models/image.model.js';
 import { generateThumbnail, getImageDimensions } from '../utils/thumbnail.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * TODO: Upload image
@@ -21,6 +22,48 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export async function uploadImage(req, res, next) {
   try {
     // Your code here
+    // console.log("checking")
+    if (req.fileValidationError) {
+      return res.status(400).json({
+        error: {
+          message: req.fileValidationError
+        }
+      });
+    }
+
+    if(!req.file){
+      return res.status(400).
+      json(
+        {
+          error:{
+            message:"No file uploaded"
+          }
+        }
+      );
+    }
+    const { filename, originalname, mimetype, size } = req.file;
+    const filepath = req.file.path;
+
+    const dimesions = await getImageDimensions(req.file.path);
+
+    const thumbnailFilename = await generateThumbnail(filename);
+
+    const { description = '', tags = '' } = req.body;
+    const tagsArray = tags.split(',').map(tag => tag.trim()).filter(tag => tag);
+
+    const image = await Image.create({
+      originalName: originalname,
+      filename,
+      mimetype,
+      size,
+      width: dimesions.width,
+      height: dimesions.height,
+      thumbnailFilename,
+      description,
+      tags: tagsArray
+    });
+
+    res.status(201).json(image);
   } catch (error) {
     next(error);
   }
@@ -58,6 +101,41 @@ export async function uploadImage(req, res, next) {
 export async function listImages(req, res, next) {
   try {
     // Your code here
+    const { page = 1, limit = 10, search, mimetype, sortBy = 'uploadDate', sortOrder = 'desc' } = req.query;
+    const skip = (page - 1) * limit;
+    const limitNum = Math.min(parseInt(limit), 50);
+    
+    let query = {};
+    if (search) {
+      query.$text = { $search: search };
+    }
+    if (mimetype) {
+      query.mimetype = mimetype;
+    }
+
+    const total = await Image.countDocuments(query);
+    const pages = Math.ceil(total / limitNum);
+
+    const images = await Image.find(query)
+      .sort({ [sortBy]: sortOrder === 'asc' ? 1 : -1 })
+      .skip(skip)
+      .limit(limitNum);
+
+    const totalSize = await Image.aggregate([
+      { $match: query },
+      { $group: { _id: null, total: { $sum: '$size' } } }
+    ]);
+
+    res.json({
+      data: images,
+      meta: {
+        total,
+        page: parseInt(page),
+        limit: limitNum,
+        pages,
+        totalSize: totalSize.length > 0 ? totalSize[0].total : 0
+      }
+    });
   } catch (error) {
     next(error);
   }
@@ -73,6 +151,15 @@ export async function listImages(req, res, next) {
 export async function getImage(req, res, next) {
   try {
     // Your code here
+    const image = await Image.findById(req.params.id);
+    if (!image) {
+      return res.status(404).json({
+        error: {
+          message: "Image not found"
+        }
+      });
+    }
+    res.json(image);
   } catch (error) {
     next(error);
   }
@@ -94,6 +181,30 @@ export async function getImage(req, res, next) {
 export async function downloadImage(req, res, next) {
   try {
     // Your code here
+    const { id } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+  return res.status(400).json({
+    error: { message: "Invalid image ID" }
+  });
+}
+    const image = await Image.findById(id);
+  
+    if (!image) {
+      return res.status(404).json({
+        error: {
+          message: "Image not found"
+        }
+      });
+    }
+    const filepath = path.join(__dirname, '..','..','uploads', image.filename);
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).json(  { error: { message: "File not found" } });
+    }
+    res.setHeader('Content-Type', image.mimetype);
+    res.setHeader('Content-Disposition', `attachment; filename="${image.originalName}"`);
+    res.sendFile(filepath);
+
+
   } catch (error) {
     next(error);
   }
@@ -111,9 +222,53 @@ export async function downloadImage(req, res, next) {
  *    - Content-Type: image/jpeg (thumbnails are always JPEG)
  * 7. Send file using res.sendFile(thumbnailPath)
  */
+//const __filename = fileURLToPath(import.meta.url);
+//const __dirname = path.dirname(__filename);
+const __filename = fileURLToPath(import.meta.url);
+ const __dirname = path.dirname(__filename);
+
 export async function downloadThumbnail(req, res, next) {
   try {
-    // Your code here
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        error: { message: "Invalid image ID" }
+      });
+    }
+
+    const image = await Image.findById(id);
+
+    if (!image) {
+      return res.status(404).json({
+        error: { message: "Image not found" }
+      });
+    }
+
+    if (!image.thumbnailFilename) {
+      return res.status(404).json({
+        error: { message: "Thumbnail not found" }
+      });
+    }
+
+    const thumbnailPath = path.join(
+      __dirname,
+      '..',
+      '..',
+      'uploads',
+      'thumbnails',
+      image.thumbnailFilename
+    );
+
+    if (!fs.existsSync(thumbnailPath)) {
+      return res.status(404).json({
+        error: { message: "File not found" }
+      });
+    }
+
+    res.setHeader('Content-Type', 'image/jpeg');
+    return res.sendFile(thumbnailPath);
+
   } catch (error) {
     next(error);
   }
@@ -132,6 +287,36 @@ export async function downloadThumbnail(req, res, next) {
 export async function deleteImage(req, res, next) {
   try {
     // Your code here
+    const id = req.params.id;
+   
+    const image = await Image.findById(id);
+
+    if (!image) {
+      return res.status(404).json({
+        error: { message: "Image not found" }
+      });
+    }
+
+    const filepath = path.join(__dirname, '..','..','uploads', image.filename);
+    try {
+      fs.unlinkSync(filepath);
+    } catch (err) {
+      if (err.code !== 'ENOENT') {
+        throw err;
+      } // else ignore file not found error
+    }
+    const thumbnailPath = path.join(__dirname, '..','..','uploads', 'thumbnails', image.thumbnailFilename);
+    try {
+      fs.unlinkSync(thumbnailPath);
+    } catch (err) {
+      if (err.code !== 'ENOENT') {
+        throw err;
+      } // else ignore file not found error
+    }
+    await Image.findByIdAndDelete(id);
+    res.status(204).send();
+
+
   } catch (error) {
     next(error);
   }
